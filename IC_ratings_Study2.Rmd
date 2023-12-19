@@ -1,0 +1,396 @@
+---
+title: "Conditioned Stimulus rating and Instrumental Conditioning, Study 2"
+author: "Mariya Cherkasova"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+Analysis of CS+ and CS- subjective liking ratings, reward likelihood ratings, and of operant conditioning performance, Study 2
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Libraries
+```{r, packages, include=FALSE}
+
+rm(list=ls()) #clear env
+library(lme4)
+library(lattice)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(influence.ME)
+library(gmodels)#CI
+library(corrplot)
+library(arm)
+library(gridExtra)
+library(sjPlot)
+library(BayesFactor)
+library(bayestestR)
+library(report)
+
+```
+Read in data
+```{r, include=FALSE}
+ratings <- read.csv("rating_IC_NCRG.csv")
+names(ratings)[1] <- "id"
+stdata <- read.csv("STGT_CSplus2_tertiary_split_NCRG.csv")
+
+# Trim the data
+a <- ratings$id
+b <- stdata$id
+to_ex <- setdiff(a,b)
+
+df <- ratings %>% 
+  filter(!id %in% to_ex)
+df$gazeidx <- stdata$gazeidx
+df$STGT <- stdata$STGT_ter
+df$version_p <- ifelse(df$version==1|df$version==2,1,2)
+df$version_p <- factor(df$version_p)
+df$version_o <- ifelse(df$version==1|df$version==3,1,2)
+df$version_o <- factor(df$version_o)
+
+# Pivot long
+df_l_a <- df %>% 
+  pivot_longer(cols = c(CSplusAware,CSminusAware),names_to = "CS")
+
+df_l_r <- df %>% 
+  pivot_longer(cols = c(Csplus_rating,Csminus_rating),names_to = "CS")
+
+# Exclude intermediates
+df_l_a_ter <- df_l_a %>% 
+  filter(!STGT=="IM")
+
+df_l_r_ter <- df_l_r %>% 
+  filter(!STGT=="IM")
+
+```
+### Liking ratings categorical model
+```{r}
+ml <- glm(value ~ CS*STGT + version_p, data=df_l_r_ter) 
+summary(ml)
+
+plot_model(ml ,type="pred", terms=c("CS","STGT"),pred.type="fe", grid = FALSE, colors=c( "orangered","black"))
+
+p.1 <- df_l_r_ter %>% 
+  ggplot(aes(x=CS, y=value, colour=STGT, fill=STGT))+
+  geom_boxplot(alpha=0.6) +
+  geom_jitter(aes(colour=STGT,group=STGT), position = position_jitterdodge(), shape=21, size=3, colour="black")+
+  xlab("") +
+  scale_x_discrete(labels=(c("CS-", "CS+")))+
+  scale_colour_manual(values=c("black", "orange")) + 
+  scale_fill_manual(values=c("grey", "orange")) + 
+  theme_bw() +theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.title = element_blank()) + 
+  theme(panel.border= element_blank()) +
+  theme(axis.line.x = element_line(color="black", size = 0.5),
+        axis.line.y = element_line(color="black", size = 0.5), 
+        axis.text.x=element_text(angle=0, size=12, face="bold", vjust=0.5),
+        axis.text.y=element_text(angle=0, size=12, vjust=0.5),
+        axis.title=element_text(size=14)) + ylab("Subjective liking ratings") 
+p.1
+#ggsave(filename="ratings_NCRG.tiff", plot=p.1, width = 6, height = 4.5 )
+```
+### Liking ratings categorical model (Bayesian)
+
+```{r}
+full <- lmBF(value~ STGT + CS + STGT:CS + version, data=df_l_r_ter, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+interaction_null <- lmBF(value~ STGT + CS + version, data=df_l_r_ter, iterations = 10000)
+STGT_null <- lmBF(value~ CS + version, data=df_l_r_ter, iterations = 10000)
+cs_null <- lmBF(value~ STGT + version, data=df_l_r_ter, iterations = 10000)
+
+full/interaction_null
+full/STGT_null
+full/cs_null
+
+# Diagnostics
+full_post <- lmBF(value~ STGT + CS + STGT:CS + version, data=df_l_r_ter, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+### Ratings model dimensional
+```{r}
+ml.2 <- glm(value ~ CS*gazeidx + version, data=df_l_r) 
+summary(ml.2)
+
+plot_model(ml.2 ,type="pred", terms=c("gazeidx","CS"),pred.type="fe", grid = FALSE)
+
+p.2 <- df_l_r %>% 
+  ggplot(aes(x=CS, y=value))+
+  geom_boxplot(alpha=0.6) +
+  geom_jitter(width=0.25,height = 0.1)+
+  xlab("") +
+  scale_x_discrete(labels=(c("CS-", "CS+")))+
+  #scale_colour_manual(values=c("black", "orange")) + 
+  #scale_fill_manual(values=c("grey", "orange")) + 
+  theme_bw() +theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(),legend.title = element_blank()) + 
+  theme(panel.border= element_blank()) +
+  theme(axis.line.x = element_line(color="black", size = 0.5),
+        axis.line.y = element_line(color="black", size = 0.5), 
+        axis.text.x=element_text(angle=0, size=20, face="bold", vjust=0.5),
+        axis.text.y=element_text(angle=0, size=20, vjust=0.5),
+        axis.title=element_text(size=20)) + ylab("Subjective liking ratings") 
+p.2
+
+ggsave(filename="CS_liking_NCRG1.tiff", plot=p.2, width = 6, height = 4.5 )
+```
+
+### Ratings model dimensional(Bayesian)
+```{r}
+full <- lmBF(value~ gazeidx + CS + gazeidx:CS + version, data=df_l_r, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+interaction_null <- lmBF(value~ gazeidx + CS + version, data=df_l_r, iterations = 10000)
+gazeidx_null <- lmBF(value~ CS + version, data=df_l_r, iterations = 10000)
+cs_null <- lmBF(value~ gazeidx + version, data=df_l_r, iterations = 10000)
+
+full/interaction_null
+full/gazeidx_null
+full/cs_null
+
+# Diagnostics
+full_post <- lmBF(value~ gazeidx + CS + gazeidx:CS + version, data=df_l_r, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+### Awareness rating categorical model
+
+```{r}
+ml.3 <- glm(value ~ CS*STGT + version_p, data=df_l_a_ter) 
+summary(ml.3)
+
+plot_model(ml.3 ,type="pred", terms=c("STGT"),pred.type="fe", grid = FALSE)
+
+p.3 <- df_l_a_ter %>% 
+  ggplot(aes(x=CS, y=value, colour=STGT, fill=STGT)) +
+  geom_boxplot(alpha=0.6) +
+  geom_jitter(aes(colour=STGT,group=STGT), position = position_jitterdodge(), shape=21, size=3, colour="black")+
+  xlab("") +
+  scale_x_discrete(labels=(c("CS-", "CS+")))+
+  scale_colour_manual(values=c("black", "orange")) + 
+  scale_fill_manual(values=c("grey", "orange")) + 
+  theme_bw() +theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(), legend.title = element_blank()) + 
+  theme(panel.border= element_blank()) +
+  theme(axis.line.x = element_line(color="black", size = 0.5),
+        axis.line.y = element_line(color="black", size = 0.5), 
+        axis.text.x=element_text(angle=0, size=12, face="bold", vjust=0.5),
+        axis.text.y=element_text(angle=0, size=12, vjust=0.5),
+        axis.title=element_text(size=14)) + ylab("Reward likelihood rating") 
+p.3
+#ggsave(filename="awareness_NCRG.tiff", plot=p.3, width = 6, height = 4.5 )
+```
+### Awareness rating categorical model(Bayesian)
+
+```{r}
+full <- lmBF(value~ STGT + CS + STGT:CS + version, data=df_l_a_ter, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+interaction_null <- lmBF(value~ STGT + CS + version, data=df_l_a_ter, iterations = 10000)
+STGT_null <- lmBF(value~ CS + version, data=df_l_a_ter, iterations = 10000)
+cs_null <- lmBF(value~ STGT + version, data=df_l_a_ter, iterations = 10000)
+
+full/interaction_null
+full/STGT_null
+full/cs_null
+
+# Diagnostics
+full_post <- lmBF(value~ STGT + CS + STGT:CS + version, data=df_l_a_ter, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+Check if influential observations change results:
+```{r}
+# 43 changes the trend for STGT to significance, but no real reason to remove observation
+# 36 no change
+# 45 no change
+# df_l_a_terX <- df_l_a_ter[-45,]
+# ml.3X <- glm(value ~ CS*STGT + version, data=df_l_a_terX) 
+# summary(ml.3X)
+```
+
+
+### Awareness rating dimensional model
+```{r}
+ml.4 <- glm(value ~ CS*gazeidx + version_p, data=df_l_a) 
+summary(ml.4)
+
+plot_model(ml.4 ,type="pred", terms=c("gazeidx"),pred.type="fe", grid = FALSE)
+
+p.4 <- df_l_a %>% 
+  ggplot(aes(x=CS, y=value)) +
+  geom_boxplot(alpha=0.6, outlier.shape=8) +
+  geom_jitter()+
+  xlab("") +
+  scale_x_discrete(labels=(c("CS-", "CS+")))+
+  #scale_colour_manual(values=c("black", "orange")) + 
+  #scale_fill_manual(values=c("grey", "orange")) + 
+  theme_bw() +theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank(), legend.title = element_blank()) + 
+  theme(panel.border= element_blank()) +
+  theme(axis.line.x = element_line(color="black", size = 0.5),
+        axis.line.y = element_line(color="black", size = 0.5), 
+        axis.text.x=element_text(angle=0, size=20, face="bold", vjust=0.5),
+        axis.text.y=element_text(angle=0, size=20, vjust=0.5),
+        axis.title=element_text(size=20)) + ylab("Reward likelihood rating") 
+p.4
+
+ggsave(filename="CS_awareness_NCRG1.tiff", plot=p.4, width = 6, height = 4.5 )
+```
+
+
+### Ratings model dimensional (Bayesian)
+
+```{r}
+
+full <- lmBF(value~ gazeidx + CS + gazeidx:CS + version, data=df_l_a, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+interaction_null <- lmBF(value~ gazeidx + CS + version, data=df_l_a, iterations = 10000)
+gazeidx_null <- lmBF(value~ CS + version, data=df_l_a, iterations = 10000)
+cs_null <- lmBF(value~ gazeidx + version, data=df_l_a, iterations = 10000)
+
+full/interaction_null
+full/gazeidx_null
+full/cs_null
+
+# Diagnostics
+full_post <- lmBF(value~ gazeidx + CS + gazeidx:CS + version, data=df_l_a, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+
+# Operant conditioning 
+### Cattegorical model
+```{r}
+df_ic_ter <- df %>% 
+  filter(!STGT=="IM")
+df_ic_ter$IC_dec <- df_ic_ter$IC/100
+
+ml.5 <- glm(IC ~ STGT + version_o, data=df_ic_ter) 
+summary(ml.5)
+
+p.5 <- df_ic_ter %>% 
+  ggplot(aes(x=STGT, y=IC, fill=STGT)) +
+  geom_boxplot(position=position_dodge(width=0.8), alpha=0.6) +
+  geom_jitter(aes(colour=STGT), width=0.1, shape=21, size=3, colour="black")+
+  xlab("") +
+  scale_fill_manual(values=c("azure4", "orange")) + 
+  theme_bw() +theme(plot.background = element_blank(),panel.grid.major = element_blank(),panel.grid.minor = element_blank()) + 
+  theme(panel.border= element_blank()) +
+  theme(axis.line.x = element_line(color="black", size = 0.5),
+        axis.line.y = element_line(color="black", size = 0.5), 
+        axis.text.x=element_text(angle=0, size=12, face="bold", vjust=0.5),
+        axis.text.y=element_text(angle=0, size=12, vjust=0.5),
+        axis.title=element_text(size=14)) + ylab("% Rewarded response") 
+p.5
+#ggsave(filename="operant_NCRG.tiff", plot=p.3, width = 6, height = 4.5 )
+```
+
+### Operant conditioning model categorical (Bayesian)
+
+```{r}
+full <- lmBF(IC ~ STGT + version_o, data = df_ic_ter, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+null <- lmBF(IC ~ version_o, data = df_ic_ter, iterations = 10000)
+full/null
+
+# Diagnostics
+full_post <- lmBF(IC ~ STGT + version_o, data = df_ic_ter, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+```
+
+### Operant conditioning model dimensional
+
+```{r}
+
+ml.6 <- glm(IC ~ gazeidx + version_o, data=df_ic_ter) 
+summary(ml.6)
+
+```
+### One sample t-test
+```{r}
+t.test(df$IC, mu = 50.0, alternative = "greater")
+```
+### Operant conditioning model dimensional (Bayesian)
+
+```{r}
+full <- lmBF(IC ~ gazeidx + version_o, data = df, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+null <- lmBF(IC ~ version, data = df, iterations = 10000)
+full/null
+
+# Diagnostics
+full_post <- lmBF(IC ~ gazeidx + version, data = df, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+### One sample t-test Bayesian
+
+```{r}
+# Specify the null hypothesis mean (H0) and the alternative hypothesis mean (H1)
+H0_mean <- 50  # Null hypothesis mean
+#H1_mean <- 5.8  # Alternative hypothesis mean
+
+# Perform Bayesian one-sample t-test
+result <- ttestBF(df$IC, mu = H0_mean)
+
+# Summary of the Bayesian t-test
+print(result)
+
+```
+
+### Regression diagnostics
+
+```{r}
+plot(ml)
+# Cook's D plot
+# identify D values > 4/(n-k-1)
+cutoff <- 4/(36-length(ml$coefficients)-1)
+plot(ml, which=4)
+
+plot(ml.2)
+# Cook's D plot
+# identify D values > 4/(n-k-1)
+cutoff <- 4/(36-length(ml.2$coefficients)-1)
+plot(ml.2, which=4)
+
+plot(ml.3)
+# Cook's D plot
+# identify D values > 4/(n-k-1)
+cutoff <- 4/(36-length(ml.3$coefficients)-1)
+plot(ml.3, which=4)
+
+plot(ml.4)
+# Cook's D plot
+# identify D values > 4/(n-k-1)
+cutoff <- 4/(36-length(ml.4$coefficients)-1)
+plot(ml.4, which=4)
+
+plot(ml.5)
+# Cook's D plot
+# identify D values > 4/(n-k-1)
+cutoff <- 4/(36-length(ml.5$coefficients)-1)
+plot(ml.5, which=4)
+
+plot(ml.6)
+# Cook's D plot
+# identify D values > 4/(n-k-1)
+cutoff <- 4/(36-length(ml.6$coefficients)-1)
+plot(ml.6, which=4)
+```

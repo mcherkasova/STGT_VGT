@@ -1,0 +1,160 @@
+---
+title: "VGT outcome phase fixations, Cherkasova et al, 2018"
+author: "Mariya Cherkasova"
+date: "`r Sys.Date()`"
+output: html_document
+---
+Analysis of fixations during the outcome phase of the VGT (Cherkasova, 2018 dataset)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Libraries
+
+```{r,include=FALSE}
+rm(list=ls()) #clear env
+library(readr)
+library(lme4)
+library(lattice)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(influence.ME)
+library(gmodels)#CI
+library(corrplot)
+library(arm)
+library(gridExtra)
+library(sjPlot)
+library(BayesFactor)
+library(bayestestR)
+```
+
+Load data
+
+```{r, include=FALSE}
+STGT_tertiary_splitJN <- read_csv("STGT_CSplus2_tertiary_splitJN.csv")
+fbFixC <- read_csv("JN_cued_group2_fix_feedback.csv")
+fbFixUC <- read_csv("JN_uncued_group1_fix_feedback.csv")
+
+# ptdt imports as chr, fix that
+fbFixC$ptdt <- as.numeric(fbFixC$ptdt)
+fbFixUC$ptdt <- as.numeric(fbFixUC$ptdt)
+
+fbFixC$ptdt[is.na(fbFixC$ptdt)] <- 0
+fbFixUC$ptdt[is.na(fbFixUC$ptdt)] <- 0
+fbFixUC$id[is.na(fbFixUC$id)] <- 114
+fbFixC$id[fbFixC$id==427] <- 127
+
+```
+
+Participant-wise % dwell time summaries for cued
+
+```{r, include=FALSE}
+fbFixC_summ <- fbFixC %>% 
+  group_by(id,ia) %>% 
+  summarise_each(funs(mean)) %>% 
+  dplyr::select(!(trial)) %>% 
+  pivot_wider(names_from = ia, values_from = c(dt,ptdt)) %>% 
+  mutate(gazeidx_fb=ptdt_coins-ptdt_total)
+fbFixC_summ$cues <- rep("cued",68)
+
+histogram(fbFixC_summ$gazeidx_fb)
+```
+
+Participant-wise % dwell time summaries for uncued
+
+```{r}
+fbFixUC_summ <- fbFixUC %>% 
+  group_by(id,ia) %>% 
+  summarise_each(funs(mean)) %>% 
+  dplyr::select(!(trial)) %>% 
+  pivot_wider(names_from = ia, values_from = c(dt,ptdt)) %>% 
+  mutate(gazeidx_fb=ptdt_coins-ptdt_total) 
+fbFixUC_summ$cues <- rep("uncued",63)
+
+histogram(fbFixUC_summ$gazeidx_fb)
+```
+
+Merge with STGT with feedback fixation data.
+
+```{r}
+fbFixC_summ$id <- as.character(fbFixC_summ$id)
+STGT_tertiary_splitJN$id <- as.character(STGT_tertiary_splitJN$id)
+fbFix <- rbind(fbFixUC_summ,fbFixC_summ)
+fbFix_stgt <- inner_join(fbFix, STGT_tertiary_splitJN,by="id")
+
+```
+
+### Regressions & plots
+Participants look at the feedback location more in the cued condition  but no interaction with gazeidx (phenotype)
+
+```{r}
+ml <- lm(gazeidx_fb~gazeidx*cues,data=fbFix_stgt)
+summary(ml)
+
+ml.1 <- lm(gazeidx_fb~STGT_ter*cues,data=filter(fbFix_stgt, !STGT_ter=="IM"))
+summary(ml.1)
+
+
+ggplot(fbFix_stgt, aes(x=gazeidx, y=gazeidx_fb,color=cues,fill=cues))+
+       geom_point()+geom_smooth()
+
+ggplot(fbFix_stgt, aes(x=STGT_ter, y=gazeidx_fb,color=cues,fill=cues))+
+       geom_boxplot()
+```
+
+### Bayesian regression (dimensional)
+Bayes Factor
+
+```{r}
+full <- lmBF(gazeidx_fb~gazeidx + cues + gazeidx:cues,data=fbFix_stgt, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+
+null <- lmBF(gazeidx_fb~cues,data=fbFix_stgt,iterations = 10000)
+describe_posterior(null,test=c("p_direction"))
+full/null
+
+full_post <- lmBF(gazeidx_fb~gazeidx + cues + gazeidx:cues,data=fbFix_stgt, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+
+
+### Bayesian regression (categorical)
+Bayes Factor
+
+```{r}
+full <- lmBF(gazeidx_fb~STGT_ter + cues + STGT_ter:cues,data=filter(fbFix_stgt, !STGT_ter=="IM"), iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+
+null <- lmBF(gazeidx_fb~cues,data=filter(fbFix_stgt, !STGT_ter=="IM"),whichRandom="id",iterations = 10000)
+describe_posterior(null,test=c("p_direction"))
+full/null
+
+full_post <- lmBF(gazeidx_fb~STGT_ter + cues + STGT_ter:cues,data=filter(fbFix_stgt, !STGT_ter=="IM"), iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+```
+
+
+### Regression diagnostics
+
+```{r}
+
+plot(ml)
+plot(ml, which=4)
+
+plot(ml.1)
+plot(ml.1, which=4)
+
+```
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

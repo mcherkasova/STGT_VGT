@@ -1,0 +1,350 @@
+---
+title: "Pupil conditioning, Cherkasova et al, 2018"
+author: "Mariya Cherkasova"
+date: "`r Sys.Date()`"
+output: html_document
+---
+Analysis of pupil dilation in response to CS during Pavlovian conditioning (Cherkasova et al, 2018)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### Load packages, read in the data
+```{r, packages, include=FALSE}
+
+rm(list=ls()) #clear env
+library(lme4)
+library(lattice)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(influence.ME)
+library(gmodels)#CI
+library(corrplot)
+library(arm)
+library(gridExtra)
+library(sjPlot)
+library(brms)
+library(bayestestR)
+
+```
+
+### Read in and combine data
+
+```{r}
+auc_data <- data.frame(stgt=0, id=0, cs=0, hemiblock=0,trial=0, auc=0, auc_500lag=0)
+
+datadir <- "Pupil/STGT/"
+files <- list.files(path=datadir, pattern="*.txt")
+for(i in files){
+  data <- read.delim(paste0(datadir,i), header = TRUE, sep = "", dec = ".")
+  stgt <- rep(i,nrow(data))
+  data <- cbind(substr(i, 8, 9),data)
+  names(data)=names(auc_data)
+  auc_data=rbind(auc_data,data)
+}
+auc_data=auc_data[-1,]
+
+stdata <- read.csv("STGT_CSplus2_tertiary_splitJN.csv")
+pit <- read.csv("PIT_version_jn.csv")
+names(pit)[1]<-"id"
+
+#Trim PIT
+pitid<-pit$id
+stid <- stdata$id
+to_x <- setdiff(pitid,stid)
+pit <- pit %>%
+  filter(!id %in% to_x)
+
+# Combine
+auc_data <- auc_data %>% 
+  arrange(id,trial)
+
+forty <- 1:40
+st_xpand <- expand.grid(forty,stdata$gazeidx)
+version_xpand <- expand.grid(forty,pit$version)
+
+auc_data$version <- version_xpand$Var2
+auc_data$gazeidx <- st_xpand$Var2
+auc_data$cs <- as.factor(auc_data$cs)
+auc_data$hemiblock <- as.factor(auc_data$hemiblock)
+auc_data$tr_scaled <- scale(auc_data$trial)
+auc_data$auc_500lag_scaled <- scale(auc_data$auc_500lag)
+auc_data$auc_500lag_rescaled <- rescale(auc_data$auc_500lag)
+
+# visual AUC distribution
+par(mfrow=c(2,2))
+hist(auc_data$auc)
+hist(auc_data$auc_500lag)
+hist(auc_data$auc_500lag_scaled)
+hist(auc_data$auc_500lag_rescaled)
+
+auc_stgt <- auc_data %>% 
+  filter(!stgt=="im")
+st <- auc_stgt %>% 
+  filter(stgt=="st")
+gt <- auc_stgt %>% 
+  filter(stgt=="gt")
+
+```
+
+# Model: STGT x CS x Trial
+
+```{r}
+ml <- lmer(auc_500lag_scaled ~ stgt*cs*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_stgt,REML = FALSE, control = lmerControl(optimizer ="Nelder_Mead")) #with trial as a random effect
+summary(ml)
+
+# Plot fixed and random effects
+plot_model(ml,type="pred", terms=c("tr_scaled","cs"),pred.type="fe", grid = FALSE)
+```
+
+# Bayesian: STGT x CS x Trial (Categorical)
+BRMS: set priors
+
+```{r}
+#examine densities
+ggplot(auc_data, aes(x = auc_500lag_scaled, color = cs, fill = cs)) + geom_density(alpha = 0.2) +facet_wrap(~stgt)
+ggplot(auc_data, aes(x = auc_500lag_scaled, color = cs, fill = cs)) + geom_density(alpha = 0.2) +facet_wrap(~tr_scaled)
+
+get_prior(auc_500lag_scaled ~ cs*stgt*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_stgt)
+
+#set priors
+#we want to use uninformative priors, similar to BayesFactor, we will use cauchy distribution with location of 0 and scale of 0.5 for fixed effects and default BRMS student priors for random effects
+
+## Cauchy
+fullpriors = c(set_prior("cauchy(0,0.5)", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:stgtst"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:stgtst:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="stgtst"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="stgtst:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+fullpriors
+
+nullpriors = c(set_prior("cauchy(0,0.5)", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:stgtst"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="stgtst"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+nullpriors
+
+
+nullpriors_interaction = c(set_prior("cauchy(0,0.5", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:stgtst"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="stgtst"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="stgtst:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+nullpriors_interaction
+
+nullpriors_stgt = c(set_prior("cauchy(0,0.5)", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+nullpriors_stgt
+```
+# Bayesian: STGT x CS x Trial (Categorical)
+BRMS full model
+
+```{r}
+full.cat <- brm(auc_500lag_scaled ~ cs + stgt + tr_scaled + cs*stgt + stgt*tr_scaled + cs*tr_scaled + cs*stgt*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_stgt,  family=gaussian(), prior=fullpriors, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent = TRUE, iter = 10000) 
+#summary(full.cat)
+describe_posterior(full.cat, test=c("p_direction"))
+plot(full.cat)
+```
+BRMS null model without trial or interactions with trial
+
+```{r}
+null_tr.cat <- brm(auc_500lag_scaled ~ cs + stgt + cs*stgt + version + (1+cs|id), data=auc_stgt,  family=gaussian(), prior=nullpriors, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent=TRUE, iter = 10000) 
+bridge = bayes_factor(full.cat, null_tr.cat)
+bridge
+#summary(null_tr.cat)
+describe_posterior(null_tr.cat, test=c("p_direction"))
+```
+BRMS null model without cs*trial interaction
+
+```{r}
+null_trcs.cat <- brm(auc_500lag_scaled ~ cs + stgt + tr_scaled + cs*stgt + stgt*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_stgt,  family=gaussian(), prior=nullpriors_interaction, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent = TRUE, iter = 10000)  
+describe_posterior(null_trcs.cat, test=c("p_direction"))
+#summary(null_trcs.cat)
+bridge_trcs.cat = bayes_factor(full.cat, null_trcs.cat)
+bridge_trcs.cat
+```
+
+BRMS null model without gaze index
+
+```{r}
+null_gazeidx.cat <- brm(auc_500lag_scaled ~ cs + tr_scaled + cs*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_stgt,  family=gaussian(), prior=nullpriors_stgt, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent=TRUE, iter = 10000) 
+#summary(null_gazeidx.cat)
+describe_posterior(null_gazeidx.cat, test=c("p_direction"))
+bridge_gazeidx.cat = bayes_factor(full.cat, null_gazeidx.cat)
+bridge_gazeidx.cat
+```
+
+# Model: gaze index x CS x Trial (Dimensional)
+
+```{r}
+ml.1 <- lmer(auc_500lag_scaled ~ cs*gazeidx*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_data,REML = FALSE, control = lmerControl(optimizer ="Nelder_Mead")) #with trial as a random effect
+summary(ml.1)
+
+# Plot fixed and random effects
+plot_model(ml.1,type="pred", terms=c("tr_scaled","cs"),pred.type="fe", grid = FALSE)
+
+```
+
+# Bayesian: gaze index x CS x Trial (Dimensional)
+BRMS: set priors
+
+```{r}
+#get default prior
+get_prior(auc_500lag_scaled ~ cs*gazeidx*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_data)
+
+#set priors
+#we want to use uninformative priors, similar to BayesFactor, we will use cauchy distribution with location of 0 and scale of 0.5 for fixed effects and default BRMS student priors for random effects
+
+## Cauchy
+fullpriors = c(set_prior("cauchy(0,0.5)", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:gazeidx"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:gazeidx:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="gazeidx"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="gazeidx:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+fullpriors
+
+nullpriors = c(set_prior("cauchy(0,0.5)", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:gazeidx"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="gazeidx"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+nullpriors
+
+
+nullpriors_interaction = c(set_prior("cauchy(0,0.5", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:gazeidx"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="gazeidx"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="gazeidx:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+nullpriors_interaction
+
+nullpriors_gazeidx = c(set_prior("cauchy(0,0.5)", class = "Intercept"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="cs1:tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="tr_scaled"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT2"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT3"),
+              set_prior("cauchy(0,0.5)", class = "b", coef="versionPIT4"))
+nullpriors_gazeidx
+
+```
+
+# Bayesian: gaze index x CS x Trial (Dimensional)
+BRMS full model
+```{r}
+full <- brm(auc_500lag_scaled ~ cs + gazeidx + tr_scaled + cs*gazeidx + gazeidx*tr_scaled + cs*tr_scaled + cs*gazeidx*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_data,  family=gaussian(), prior=fullpriors, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent=TRUE, iter = 10000) 
+#summary(full)
+describe_posterior(full, test=c("p_direction"))
+plot(full)
+
+```
+
+BRMS null model without trial or interactions with trial
+
+```{r}
+null_tr <- brm(auc_500lag_scaled ~ cs + gazeidx + cs*gazeidx + version + (1+cs|id), data=auc_data,  family=gaussian(), prior=nullpriors, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent=TRUE, iter = 10000) 
+bridge = bayes_factor(full, null_tr)
+bridge
+#summary(null_tr)
+describe_posterior(null_tr, test=c("p_direction"))
+
+```
+
+BRMS null model without cs*trial interactions
+
+```{r}
+null_trcs <- brm(auc_500lag_scaled ~ cs + gazeidx + tr_scaled + cs*gazeidx + gazeidx*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_data,  family=gaussian(), prior=nullpriors_interaction, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent=TRUE, iter = 10000)  
+describe_posterior(null_trcs, test=c("p_direction"))
+#summary(null_trcs)
+bridge_trcs = bayes_factor(full, null_trcs)
+bridge_trcs
+
+```
+
+BRMS null model without gaze index
+
+```{r}
+
+null_gazeidx <- brm(auc_500lag_scaled ~ cs + tr_scaled + cs*tr_scaled + version + (1+cs+tr_scaled|id), data=auc_data,  family=gaussian(), prior=nullpriors_gazeidx, save_pars = save_pars(all = TRUE), sample_prior = TRUE, silent = TRUE, iter = 10000) 
+#summary(null_gazeidx)
+describe_posterior(null_gazeidx, test=c("p_direction"))
+bridge_gazeidx = bayes_factor(full, null_gazeidx)
+bridge_gazeidx
+
+```
+
+# Regression diagnostics: ml
+
+```{r}
+# resid plot
+
+plot(resid(ml))
+
+#model_est <- influence(ml,"id") 
+#saveRDS(model_est, file = "ppl_conditioningJN_influenceme_ml.rds")
+model_est <- readRDS(file = "ppl_conditioningJN_influenceme_ml.rds")
+
+model_est.dfB <- dfbetas(model_est)
+plot(model_est,which="dfbetas",parameters=c(2,3,4,8,9),xlab="DFbetaS",ylab="Participant") # cutoff value 2/sqrt(n)
+
+cooks.distance(model_est,parameter=c(2,3,4,8,9))
+plot(model_est,which ='cook' , sort=TRUE, xlab="Cook´s Distance", ylab="Participant") # cutoff value sqrt(4/n)
+
+sigtest(model_est, test=-1.96)$hemiblock2
+sigtest(model_est, test=-1.96)$`stgt:hemiblock2`
+
+```
+
+# Regression diagnostics: ml.1
+
+```{r}
+# resid plot
+plot(resid(ml.1))
+
+#model_est.1 <- influence(ml.1,"id") 
+#saveRDS(model_est.1, file = "ppl_conditioningJN_influenceme_ml1.rds")
+model_est.1 <- readRDS(file = "ppl_conditioningJN_influenceme_ml1.rds")
+
+model_est.1.dfB <- dfbetas(model_est.1)
+plot(model_est.1,which="dfbetas",parameters=c(2,3,4,8,9),xlab="DFbetaS",ylab="Participant") # cutoff value 2/sqrt(n): 0.22
+
+cooks.distance(model_est.1,parameter=c(2,3,4,8,9))
+plot(model_est.1,which ='cook' , sort=TRUE, xlab="Cook´s Distance", ylab="Participant") # cutoff value sqrt(4/n): 0.22
+
+sigtest(model_est.1, test=-1.96)$tr_scaled
+sigtest(model_est.1, test=-1.96)$`cs1:tr_scaled`
+
+```
+

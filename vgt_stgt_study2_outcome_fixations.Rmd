@@ -1,0 +1,148 @@
+---
+title: "VGT outcome fixations, Study 2"
+author: "Mariya Cherkasova"
+date: "`r Sys.Date()`"
+output: html_document
+---
+Analysis of fixations during the outcome phase of the VGT (Study2)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Libraries
+
+```{r, include=FALSE}
+rm(list=ls()) #clear env
+library(readr)
+library(lme4)
+library(lattice)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(influence.ME)
+library(gmodels)#CI
+library(corrplot)
+library(arm)
+library(gridExtra)
+library(sjPlot)
+library(BayesFactor)
+library(bayestestR)
+```
+
+Load data
+
+```{r include=FALSE}
+fbFixUC_ncrg <- read_csv("ncrg_UC_fb_aggregate_fix.csv")
+fbFixC_ncrg <- read_csv("ncrg_C_fb_aggregate_fix.csv")
+STGT_tertiary_splitNCRG <- read_csv("STGT_CSplus2_tertiary_split_NCRG.csv")
+
+# ptdt imports as chr, fix that
+#fbFixC_ncrg_gt$ptdt <- as.numeric(fbFixC_ncrg_gt$ptdt)
+#fbFixUC_nrcg$ptdt <- as.numeric(fbFixUC$ptdt)
+
+#fbFixC_ncrg_gt$ptdt[is.na(fbFixC_ncrg_gt$ptdt)] <- 0
+#fbFixUC$ptdt[is.na(fbFixUC$ptdt)] <- 0
+#unique(fbFixC_ncrg_gt$id)
+
+```
+
+Participant-wise % dwell time summaries for cued
+
+```{r}
+fbFixC_ncrg_summ <- fbFixC_ncrg %>% 
+  dplyr::select(!(ia_id)) %>% 
+  pivot_wider(names_from = ia, values_from = c(dt,ptdt)) %>% 
+  mutate(gazeidx_fb=(ptdt_Coins-ptdt_Total)/100)
+fbFixC_ncrg_summ$cues <- rep("cued", nrow(fbFixC_ncrg_summ))
+
+histogram(fbFixC_ncrg_summ$gazeidx_fb)
+
+```
+
+Participant-wise % dwell time summaries for uncued
+```{r}
+fbFixUC_ncrg_summ <- fbFixUC_ncrg %>% 
+  dplyr::select(!(ia_id)) %>% 
+  pivot_wider(names_from = ia, values_from = c(dt,ptdt)) %>% 
+  mutate(gazeidx_fb=(ptdt_Coins-ptdt_Total)/100)
+fbFixUC_ncrg_summ$cues <- rep("uncued", nrow(fbFixUC_ncrg_summ))
+
+histogram(fbFixUC_ncrg_summ$gazeidx_fb)
+```
+
+Merge with STGT with feedback fixation data.
+
+```{r}
+fbFixUC_ncrg_stgt <- inner_join(fbFixUC_ncrg_summ, STGT_tertiary_splitNCRG,by="id")
+fbFixC_ncrg_stgt <- inner_join(fbFixC_ncrg_summ, STGT_tertiary_splitNCRG,by="id")
+
+fbFix_ncrg_stgt <- rbind(fbFixUC_ncrg_stgt,fbFixC_ncrg_stgt)
+
+```
+
+### Regression & plots
+
+```{r}
+ml <- lm(gazeidx_fb~gazeidx*cues,data=fbFix_ncrg_stgt)
+summary(ml)
+
+ml.1 <- lm(gazeidx_fb~STGT_ter*cues,data=filter(fbFix_ncrg_stgt, !STGT_ter=="IM"))
+summary(ml.1)
+
+ggplot(fbFix_ncrg_stgt, aes(x=gazeidx, y=gazeidx_fb,color=cues,fill=cues))+
+       geom_point()+geom_smooth()
+
+ggplot(fbFix_ncrg_stgt, aes(x=STGT_ter, y=gazeidx_fb,color=cues,fill=cues))+
+       geom_boxplot()
+
+
+```
+
+### Bayesian regression (dimensional) 
+(BayesFactor)
+
+```{r}
+full <- lmBF(gazeidx_fb~gazeidx + cues + gazeidx:cues,data=fbFix_ncrg_stgt, iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+
+null <- lmBF(gazeidx_fb~cues,data=fbFix_ncrg_stgt, iterations = 10000)
+describe_posterior(null,test=c("p_direction"))
+full/null
+
+full_post <- lmBF(gazeidx_fb~gazeidx + cues + gazeidx:cues,data=fbFix_ncrg_stgt, iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+```
+### Bayesian regression (categorical) 
+
+```{r}
+full <- lmBF(gazeidx_fb~STGT_ter + cues + STGT_ter:cues,data=filter(fbFix_ncrg_stgt, !STGT_ter=="IM"), iterations = 10000)
+describe_posterior(full,test=c("p_direction"))
+
+null <- lmBF(gazeidx_fb~cues,data=filter(fbFix_ncrg_stgt, !STGT_ter=="IM"), iterations = 10000)
+describe_posterior(null,test=c("p_direction"))
+full/null
+
+full_post <- lmBF(gazeidx_fb~STGT_ter + cues + STGT_ter:cues,data=filter(fbFix_ncrg_stgt, !STGT_ter=="IM"), iterations = 10000, posterior = TRUE)
+
+#plots
+par(mar=c(1,1,1,1))
+plot(full_post)
+
+```
+
+### Regression diagnostics
+
+```{r}
+
+plot(ml)
+plot(ml, which=4)
+
+plot(ml.1)
+plot(ml.1, which=4)
+
+```
+
